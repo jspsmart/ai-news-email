@@ -29,6 +29,7 @@ SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.163.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 
 num = 10
+prompt = "AI人工智能技术、软件编程方向 新闻"
 
 def fetch_ai_news():
     f"""使用 Tavily API 搜索当日 AI新闻，返回前 {num} 条"""
@@ -36,18 +37,53 @@ def fetch_ai_news():
     if not TAVILY_API_KEY:
         raise ValueError("请设置环境变量 TAVILY_API_KEY 或配置 .env")
     # 使用系统默认证书路径
-    resp = requests.post(
-        "https://api.tavily.com/search",
-        json={
-            "api_key": TAVILY_API_KEY,
-            "query": "AI人工智能技术、软件编程方向 新闻",
-            "search_depth": "advanced",
-            "max_results": num,
-            "include_answer": False
-        },
-        timeout=30,
-        verify=certifi.where()
-    )
+    try:
+        # 优先使用certifi提供的证书
+        cert_path = certifi.where()
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": TAVILY_API_KEY,
+                "query": prompt,
+                "search_depth": "advanced",
+                "max_results": num,
+                "include_answer": False
+            },
+            timeout=30,
+            verify=cert_path
+        )
+    except (OSError, AttributeError):
+        # 备选方案1：使用系统证书路径
+        print("警告：无法使用certifi证书，尝试使用系统默认证书路径...")
+        try:
+            system_cert_path = '/etc/ssl/cert.pem'
+            resp = requests.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": TAVILY_API_KEY,
+                    "query": prompt, "": "",
+                    "search_depth": "advanced",
+                    "max_results": num,
+                    "include_answer": False
+                },
+                timeout=30,
+                verify=system_cert_path
+            )
+        except Exception as e:
+            # 备选方案2：禁用证书验证（仅作为最后手段）
+            print(f"警告：无法使用系统证书，尝试禁用证书验证... (错误: {e})")
+            resp = requests.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": TAVILY_API_KEY,
+                    "query": prompt,
+                    "search_depth": "advanced",
+                    "max_results": num,
+                    "include_answer": False
+                },
+                timeout=30,
+                verify=False
+            )
     resp.raise_for_status()
     data = resp.json()
     results = data.get("results", [])[:num]
@@ -83,7 +119,24 @@ def send_email(body):
     msg["To"] = TO_EMAIL
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    context = ssl.create_default_context()
+    # 使用certifi提供的证书路径来解决SSL验证问题
+    try:
+        # 优先使用certifi提供的证书
+        cert_path = certifi.where()
+        context = ssl.create_default_context(cafile=cert_path)
+    except (OSError, AttributeError):
+        # 备选方案1：使用系统默认证书路径
+        print("警告：无法使用certifi证书，尝试使用系统默认证书路径...")
+        try:
+            system_cert_path = '/etc/ssl/cert.pem'
+            context = ssl.create_default_context(cafile=system_cert_path)
+        except Exception as e:
+            # 备选方案2：使用默认SSL上下文（不指定证书文件）
+            print(f"警告：无法使用系统证书，尝试使用默认SSL上下文... (错误: {e})")
+            context = ssl.create_default_context()
+            # 如果还是失败，可以考虑禁用证书验证（仅作为最后手段）
+            # context.check_hostname = False
+            # context.verify_mode = ssl.CERT_NONE
     # Gmail 常用 587 + STARTTLS；163 等常用 465 + SSL
     if SMTP_PORT == 465:
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as s:
